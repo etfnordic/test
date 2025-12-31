@@ -7,6 +7,8 @@ const POLL_MS = 3000;
 const ANIM_MIN_MS = 350;
 const ANIM_MAX_MS = Math.min(POLL_MS * 0.85, 2500);
 
+let refreshing = false;
+
 const map = L.map("map").setView([59.3293, 18.0686], 12);
 L.tileLayer("https://{s}.tile.openstreetmap.fr/hot/{z}/{x}/{y}.png", {
   maxZoom: 19,
@@ -21,11 +23,6 @@ const lastBearing = new Map();
 const bearingEstablished = new Map();
 
 let timer = null;
-
-/* --- refresh concurrency --- */
-let inFlight = false;
-let pendingRefresh = false;
-let abortCtl = null;
 
 /* ----------------------------
    Hover/Pin label-state
@@ -455,89 +452,59 @@ function unknownArrowSvg(fillColor, strokeColor, sizePx = 18) {
   `;
 }
 
+
 function makeRailIcon(line, bearingDeg, pop = false) {
   const color = colorForRailLine(line);
   const stroke = darkenHex(color, 0.01);
 
-  if (!Number.isFinite(bearingDeg)) {
-    const html = `
-      <div class="trainMarker" style="filter: drop-shadow(0 2px 2px rgba(0,0,0,.35));">
-        <div class="trainDot" style="
-          width: 16px; height: 16px;
-          border-radius: 999px;
-          background: ${color};
-          border: 2px solid ${stroke};
-        "></div>
-      </div>
-    `;
-    return L.divIcon({
-      className: "trainIconWrap",
-      html,
-      iconSize: [18, 18],
-      iconAnchor: [9, 9],
-    });
-  }
-
-  const rot = bearingDeg + 90;
-  const popWrapClass = pop ? "trainMarkerPopWrap" : "";
+  const hasBearing = Number.isFinite(bearingDeg);
+  const rot = hasBearing ? bearingDeg + 90 : 0;
 
   const html = `
-    <div class="${popWrapClass}" style="filter: drop-shadow(0 2px 2px rgba(0,0,0,.35));">
-      <div class="trainMarker rotEl" style="transform: rotate(${rot}deg);">
-        ${railArrowSvg(color, stroke, 24)}
+    <div class="vehWrap railWrap ${hasBearing ? "hasBearing" : ""} ${pop ? "pop" : ""}"
+         style="--rot:${rot}deg; --fill:${color}; --stroke:${stroke}; --size:34px; --dotSize:16px;">
+      <div class="vehArrow">
+        ${railArrowSvg("var(--fill)", "var(--stroke)", 24)}
       </div>
+      <div class="vehDot"></div>
     </div>
   `;
 
   return L.divIcon({
-    className: "trainIconWrap",
+    className: "vehIconWrap trainIconWrap",
     html,
     iconSize: [34, 34],
     iconAnchor: [17, 17],
   });
 }
 
+
+
 function makeUnknownIcon(bearingDeg, pop = false) {
   const color = "#111827";
   const stroke = "#0b1220";
 
-  if (!Number.isFinite(bearingDeg)) {
-    const html = `
-      <div style="filter: drop-shadow(0 2px 2px rgba(0,0,0,.35));">
-        <div style="
-          width: 10px; height: 10px;
-          border-radius: 999px;
-          background: ${color};
-          border: 2px solid ${stroke};
-        "></div>
-      </div>
-    `;
-    return L.divIcon({
-      className: "trainIconWrap",
-      html,
-      iconSize: [20, 20],
-      iconAnchor: [10, 10],
-    });
-  }
+  const hasBearing = Number.isFinite(bearingDeg);
+  const rot = hasBearing ? (((bearingDeg - 90) % 360) + 360) % 360 : 0;
 
-  const rot = (((bearingDeg - 90) % 360) + 360) % 360;
-
-  const popWrapClass = pop ? "trainIconPop" : "trainIconPopNone";
   const html = `
-    <div class="${popWrapClass}" style="filter: drop-shadow(0 2px 2px rgba(0,0,0,.35));">
-      <div class="trainMarker rotEl" style="transform: rotate(${rot}deg);">
-        ${unknownArrowSvg(color, stroke, 18)}
+    <div class="vehWrap unknownWrap ${hasBearing ? "hasBearing" : ""} ${pop ? "pop" : ""}"
+         style="--rot:${rot}deg; --fill:${color}; --stroke:${stroke}; --size:24px; --dotSize:10px;">
+      <div class="vehArrow">
+        ${railArrowSvg("var(--fill)", "var(--stroke)", 22)}
       </div>
+      <div class="vehDot"></div>
     </div>
   `;
 
   return L.divIcon({
-    className: "trainIconWrap",
+    className: "vehIconWrap",
     html,
-    iconSize: [26, 26],     // mindre än tåg (som var ~34)
-    iconAnchor: [13, 13],
+    iconSize: [24, 24],
+    iconAnchor: [12, 12],
   });
 }
+
 
 /* Buss/Boat-ikon: arrow SVG med valfri dash/gradient */
 function arrowSvg({ fill, stroke, strokeWidth = 5, dash = null, gradient = null, sizePx = 22 }) {
@@ -602,27 +569,29 @@ function busArrowFillOnly({ fill, sizePx = 26 }) {
   `;
 }
 
+
 function makeBusIcon(bearingDeg, v) {
   const rot = Number.isFinite(bearingDeg) ? bearingDeg : 0;
   const size = 26;
-
   const style = busColorStyleForVehicle(v);
 
   const html = `
-    <div style="filter: drop-shadow(0 2px 2px rgba(0,0,0,.35));">
-      <div style="transform: rotate(${rot}deg); width:${size}px; height:${size}px; display:flex; align-items:center; justify-content:center;" class="rotEl">
-        ${busArrowFillOnly({ fill: style.iconFill, sizePx: size })}
+    <div class="vehWrap busWrap"
+         style="--rot:${rot}deg; --fill:${style.iconFill}; --size:${size}px;">
+      <div class="vehArrow" style="display:flex;">
+        ${busArrowFillOnly({ fill: "var(--fill)", sizePx: size })}
       </div>
     </div>
   `;
 
   return L.divIcon({
-    className: "busIconWrap",
+    className: "vehIconWrap busIconWrap",
     html,
     iconSize: [size, size],
     iconAnchor: [size / 2, size / 2],
   });
 }
+
 
 function boatChevronSvg({ fill, sizePx = 24, gradient = null }) {
   const defs = gradient
@@ -658,10 +627,10 @@ function boatChevronSvg({ fill, sizePx = 24, gradient = null }) {
   `;
 }
 
+
 function makeBoatIcon(bearingDeg, v) {
   const rot = Number.isFinite(bearingDeg) ? bearingDeg - 90 : 0;
   const size = 24;
-
   const style = boatStyleForVehicle(v);
 
   const svg =
@@ -672,24 +641,60 @@ function makeBoatIcon(bearingDeg, v) {
         })
       : boatChevronSvg({
           sizePx: size,
-          fill: style.iconFill ?? BOAT_PENDEL_BG,
+          fill: "var(--fill)",
         });
 
+  const fillForVar = style.iconFill ?? BOAT_PENDEL_BG;
+
   const html = `
-    <div style="filter: drop-shadow(0 3px 4px rgba(0,0,0,.45));">
-      <div style="transform: rotate(${rot}deg); width:${size}px; height:${size}px; display:flex; align-items:center; justify-content:center;" class="rotEl">
+    <div class="vehWrap boatWrap"
+         style="--rot:${rot}deg; --fill:${fillForVar}; --size:${size}px;">
+      <div class="vehArrow" style="display:flex;">
         ${svg}
       </div>
     </div>
   `;
 
   return L.divIcon({
-    className: "boatIconWrap",
+    className: "vehIconWrap boatIconWrap",
     html,
     iconSize: [size, size],
     iconAnchor: [size / 2, size / 2],
   });
 }
+
+
+function getMarkerElCached(m) {
+  if (m.el && m.el.isConnected) return m.el;
+  const el = m.arrowMarker.getElement?.();
+  if (el) m.el = el;
+  return el || null;
+}
+
+function popOnce(el) {
+  el.classList.add("pop");
+  window.setTimeout(() => el.classList.remove("pop"), 350);
+}
+
+function updateRailOrUnknownEl(el, { rot, fill, stroke, hasBearing, pop }) {
+  el.style.setProperty("--rot", `${rot}deg`);
+  el.style.setProperty("--fill", fill);
+  el.style.setProperty("--stroke", stroke);
+
+  el.classList.toggle("hasBearing", !!hasBearing);
+  if (pop) popOnce(el);
+}
+
+function updateBusEl(el, { rot, fill }) {
+  el.style.setProperty("--rot", `${rot}deg`);
+  el.style.setProperty("--fill", fill);
+}
+
+function updateBoatEl(el, { rot, fill }) {
+  el.style.setProperty("--rot", `${rot}deg`);
+  el.style.setProperty("--fill", fill);
+}
+
 
 function makeLabelIcon(v, labelText, speedKmh, pinned = false) {
   const text = `${labelText}${fmtSpeed(speedKmh)}`;
@@ -1469,23 +1474,6 @@ function removeAllNow() {
   }
 }
 
-
-function iconKeyForVehicle(v, hasBearingNow) {
-  if (v.type === 700) return `bus:${busCategoryTokenForVehicle(v)}:${hasBearingNow ? 1 : 0}`;
-  if (v.type === 1000) return `boat:${boatCategoryTokenForVehicle(v)}:${hasBearingNow ? 1 : 0}`;
-  if (v.unknown) return `unk:${hasBearingNow ? 1 : 0}`;
-  return `rail:${normalizeLine(v.line)}:${hasBearingNow ? 1 : 0}`;
-}
-
-function applyRotationToMarker(leafletMarker, rotDeg) {
-  const el = leafletMarker.getElement?.();
-  if (!el) return false;
-  const rotEl = el.querySelector(".rotEl");
-  if (!rotEl) return false;
-  rotEl.style.transform = `rotate(${rotDeg}deg)`;
-  return true;
-}
-
 /* =========================================================
    Upsert vehicle
 ========================================================= */
@@ -1572,7 +1560,6 @@ function upsertVehicle(v) {
       lastV: v,
       lastPos: pos,
       hasBearing: hasBearingNow,
-      iconKey: iconKeyForVehicle(v, hasBearingNow),
       anim: null,
     });
   } else {
@@ -1583,37 +1570,57 @@ function upsertVehicle(v) {
 
     m.lastV = v;
     m.lastPos = pos;
-    m.hasBearing = hasBearingNow;
+    
+m.hasBearing = hasBearingNow;
 
-    // Only rebuild the icon HTML when the visual appearance actually changes.
-    const newKey = iconKeyForVehicle(v, hasBearingNow);
-    const needsIconRebuild = pop || m.iconKey !== newKey;
+// Uppdatera ikon visuellt UTAN setIcon() (mindre DOM-churn)
+const el = getMarkerElCached(m);
+if (el) {
+  const wrap = el.querySelector(".vehWrap") ?? el;
 
-    // Compute rotation (same visual math as before)
-    let rotDeg = 0;
-    if (hasBearingNow) {
-      if (v.type === 700) rotDeg = bearing;                // bus
-      else if (v.type === 1000) rotDeg = bearing - 90;     // boat
-      else if (v.unknown) rotDeg = (((bearing - 90) % 360) + 360) % 360; // unknown arrow
-      else rotDeg = bearing + 90;                          // rail arrow
-    }
-
-    if (needsIconRebuild) {
-      const icon =
-        v.type === 700
-          ? makeBusIcon(hasBearingNow ? bearing : NaN, v)
-          : v.type === 1000
-            ? makeBoatIcon(hasBearingNow ? bearing : NaN, v)
-            : v.unknown
-              ? makeUnknownIcon(hasBearingNow ? bearing : NaN, pop)
-              : makeRailIcon(v.line, hasBearingNow ? bearing : NaN, pop);
-
-      m.arrowMarker.setIcon(icon);
-      m.iconKey = newKey;
-    } else if (hasBearingNow) {
-      // Fast path: just rotate the existing DOM node (no icon rebuild).
-      applyRotationToMarker(m.arrowMarker, rotDeg);
-    }
+  if (v.type === 700) {
+    const style = busColorStyleForVehicle(v);
+    updateBusEl(wrap, {
+      rot: hasBearingNow ? bearing : 0,
+      fill: style.iconFill,
+    });
+  } else if (v.type === 1000) {
+    const style = boatStyleForVehicle(v);
+    updateBoatEl(wrap, {
+      rot: hasBearingNow ? bearing - 90 : 0,
+      fill: style.iconFill ?? BOAT_PENDEL_BG,
+    });
+  } else if (v.unknown) {
+    updateRailOrUnknownEl(wrap, {
+      rot: hasBearingNow ? ((((bearing - 90) % 360) + 360) % 360) : 0,
+      fill: "#111827",
+      stroke: "#0b1220",
+      hasBearing: hasBearingNow,
+      pop,
+    });
+  } else {
+    const color = colorForRailLine(v.line);
+    const stroke = darkenHex(color, 0.01);
+    updateRailOrUnknownEl(wrap, {
+      rot: hasBearingNow ? bearing + 90 : 0,
+      fill: color,
+      stroke,
+      hasBearing: hasBearingNow,
+      pop,
+    });
+  }
+} else {
+  // Fallback om element inte finns ännu: sätt ikon en gång
+  if (v.type === 700) {
+    m.arrowMarker.setIcon(makeBusIcon(hasBearingNow ? bearing : NaN, v));
+  } else if (v.type === 1000) {
+    m.arrowMarker.setIcon(makeBoatIcon(hasBearingNow ? bearing : NaN, v));
+  } else if (v.unknown) {
+    m.arrowMarker.setIcon(makeUnknownIcon(hasBearingNow ? bearing : NaN, pop));
+  } else {
+    m.arrowMarker.setIcon(makeRailIcon(v.line, hasBearingNow ? bearing : NaN, pop));
+  }
+}
 
     const from = m.arrowMarker.getLatLng();
     const to = L.latLng(pos[0], pos[1]);
@@ -1643,67 +1650,53 @@ function upsertVehicle(v) {
 ========================================================= */
 async function refreshLive() {
   if (document.visibilityState !== "visible") return;
+  if (refreshing) return;
+  refreshing = true;
 
-  // Prevent overlapping refreshes (keeps UI smooth on slow networks)
-  if (inFlight) {
-    pendingRefresh = true;
+  try {
+  ensureChipDock();
+
+  const res = await fetch(API_URL, { cache: "no-store"
+  } finally {
+    refreshing = false;
+  }
+}
+);
+  if (!res.ok) throw new Error(`API error: ${res.status}`);
+
+  const data = await res.json();
+  const seen = new Set();
+
+  if (isShowNone()) {
+    removeAllNow();
+    updateModeChipInactiveStates();
+    renderSubchips();
     return;
   }
 
-  inFlight = true;
-  pendingRefresh = false;
+  for (const raw of data) {
+    if (!raw?.id || raw.lat == null || raw.lon == null) continue;
 
-  // Abort any previous fetch that might still be in-flight
-  try { abortCtl?.abort(); } catch {}
-  abortCtl = new AbortController();
+    const v = enrich(raw);
+    if (!v) continue;
 
-  ensureChipDock();
+    v.line = normalizeLine(v.line);
 
-  try {
-    const res = await fetch(API_URL, { cache: "no-store", signal: abortCtl.signal });
-    if (!res.ok) throw new Error(`API error: ${res.status}`);
-
-    const data = await res.json();
-    const seen = new Set();
-
-    if (isShowNone()) {
-      removeAllNow();
-      updateModeChipInactiveStates();
-      if (subPanelModeKey && subPanelEl?.classList?.contains("is-open")) renderSubchips();
-      return;
+    if (!passesFilter(v)) {
+      if (markers.has(v.id)) removeVehicleCompletely(v.id);
+      continue;
     }
 
-    for (const raw of data) {
-      if (!raw?.id || raw.lat == null || raw.lon == null) continue;
-
-      const v = enrich(raw);
-      if (!v) continue;
-
-      v.line = normalizeLine(v.line);
-
-      if (!passesFilter(v)) {
-        if (markers.has(v.id)) removeVehicleCompletely(v.id);
-        continue;
-      }
-
-      seen.add(v.id);
-      upsertVehicle(v);
-    }
-
-    for (const [id] of markers.entries()) {
-      if (!seen.has(id)) removeVehicleCompletely(id);
-    }
-
-    updateModeChipInactiveStates();
-    // Only re-render the subchip panel if it's open (big DOM win)
-    if (subPanelModeKey && subPanelEl?.classList?.contains("is-open")) renderSubchips();
-  } catch (err) {
-    // Ignore abort errors; they are expected when a new refresh starts
-    if (err?.name !== "AbortError") throw err;
-  } finally {
-    inFlight = false;
-    if (pendingRefresh) refreshLive().catch(console.error);
+    seen.add(v.id);
+    upsertVehicle(v);
   }
+
+  for (const [id] of markers.entries()) {
+    if (!seen.has(id)) removeVehicleCompletely(id);
+  }
+
+  updateModeChipInactiveStates();
+  renderSubchips();
 }
 
 /* =========================================================

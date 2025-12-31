@@ -74,6 +74,60 @@ html, body { height: 100%; margin: 0; }
     0 0 18px rgba(255,255,255,.28);  /* mjukt glow */
 }
 
-/* Perf hints */
-.trainMarker{ will-change: transform; }
-.trainIconWrap{ will-change: transform; }
+/* =========================================================
+   Perf: stabil DOM-ikon + CSS-variabler (alla fordon)
+========================================================= */
+
+.vehIconWrap {
+  cursor: pointer;
+}
+
+/* En wrapper per ikon (Leaflet divIcon HTML) */
+.vehWrap {
+  /* Kommentera bort om du vill minimera GPU/repaint ännu mer */
+  filter: drop-shadow(0 2px 3px rgba(0,0,0,0.35));
+}
+
+/* Arrow container som roteras mjukt */
+.vehArrow {
+  display: none;
+  width: var(--size, 34px);
+  height: var(--size, 34px);
+  align-items: center;
+  justify-content: center;
+
+  transform: rotate(var(--rot, 0deg));
+  transition: transform 160ms ease-out;
+  will-change: transform;
+}
+
+/* Dot (för rail/unknown när bearing saknas) */
+.vehDot {
+  width: var(--dotSize, 16px);
+  height: var(--dotSize, 16px);
+  border-radius: 999px;
+  background: var(--fill, #111827);
+  border: 2px solid var(--stroke, #0b1220);
+  box-shadow: 0 0 0 0.75px rgba(255,255,255,.25) inset;
+}
+
+/* Visa pil när bearing finns */
+.vehWrap.hasBearing .vehArrow { display: flex; }
+.vehWrap.hasBearing .vehDot   { display: none; }
+
+/* Pop-animation när ett fordon går från dot -> pil */
+.vehWrap.pop .vehArrow {
+  animation: trainPopIn 300ms cubic-bezier(.2,.8,.25,1) both;
+}
+
+/* Buss: lite mindre */
+.busWrap { --size: 26px; }
+
+/* Båt: lite mindre och lite tyngre skugga */
+.boatWrap {
+  --size: 24px;
+  filter: drop-shadow(0 3px 4px rgba(0,0,0,0.45));
+}
+
+/* Unknown: lite mindre dot */
+.unknownWrap { --dotSize: 10px; --size: 24px; }
